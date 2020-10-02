@@ -17,10 +17,8 @@
     "require": {
         "symfony/framework-bundle": "~4.0||~5.0",
         "doctrine/orm": "~2.7",
-        "doctrine/doctrine-bundle": "~2.1"
-    },
-    "suggest": {
-        "jms/serializer-bundle": "Advanced JSON encoding capabilities, recommended."
+        "doctrine/doctrine-bundle": "~2.1",
+        "jms/serializer-bundle": "^3.7"
     },
     "autoload": {
         "psr-0": { "Tejadong\\DatatablesBundle": "" }
