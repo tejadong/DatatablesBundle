@@ -38,19 +38,9 @@ of values are returned for the final field in question.
 
 ## Prerequisites
 
-This version of the bundle requires Symfony 2.1+. This bundle also needs the JMSSerializerBundle
+This version of the bundle requires Symfony 4+. This bundle also needs the JMSSerializerBundle
 for JSON encoding. For information on installing the JMSSerializerBundle please look [here](http://jmsyst.com/bundles/JMSSerializerBundle/master/installation).
 
-If you do not have that bundle registered you will need to supply a different
-serializer service in your config file...
-
-```yml
-// app/config.yml
-
-tejadong_datatables:
-    services:
-        serializer: some_other_serializer # Defaults to jms_serializer.serializer
-```
 
 ## Installation
 
@@ -63,32 +53,15 @@ Use composer to download the bundle using the following command:
 $ php composer require tejadong/datatables-bundle
 ```
 
-### Step 2: Enable the bundle
-
-Enable the bundle in the kernel:
-
-``` php
-<?php
-// app/AppKernel.php
-
-public function registerBundles()
-{
-    $bundles = array(
-        // ...
-        new Tejadong\DatatablesBundle\TejadongDatatablesBundle(),
-    );
-}
-```
-
 ## Usage
 
 To respond to a DataTables.js request from a controller, you can do the following:
 
 ``` php
 
-public function getDatatableAction()
+public function getDatatableAction(DatatableManager $datatableManager)
 {
-    $datatable = $this->get('tejadong_datatables')->getDatatable('AcmeDemoBundle:Customer');
+    $datatable = $datatableManager->getDatatable('AcmeDemoBundle:Customer');
 
     return $datatable->getSearchResults();
 }
@@ -103,9 +76,9 @@ can be set on a per columm basis:
 use Tejadong\DatatablesBundle\Datatables\DataTable;
 ...
 
-public function getDatatableAction()
+public function getDatatableAction(DatatableManager $datatableManager)
 {
-    $datatable = $this->get('tejadong_datatables')->getDatatable('AcmeDemoBundle:Customer');
+    $datatable = $datatableManager->getDatatable('AcmeDemoBundle:Customer');
 
      // The default type for all joins is inner. Change it to left if desired.
     $datatable->setDefaultJoinType(Datatable::JOIN_LEFT);
@@ -127,9 +100,9 @@ constants `Datatable::RESULT_ARRAY` and `Datatable::RESULT_JSON`:
 use Tejadong\DatatablesBundle\Datatables\DataTable;
 ...
 
-public function getDatatableAction()
+public function getDatatableAction(DatatableManager $datatableManager)
 {
-    $datatable = $this->get('tejadong_datatables')->getDatatable('AcmeDemoBundle:Customer');
+    $datatable = $datatableManager->getDatatable('AcmeDemoBundle:Customer');
 
     // Get the results as an array
     $datatableArray = $datatable->getSearchResults(Datatable::RESULT_ARRAY);
@@ -146,9 +119,9 @@ is passed the QueryBuilder instance as an argument.
 
 ``` php
 
-public function getDatatableAction()
+public function getDatatableAction(DatatableManager $datatableManager)
 {
-    $datatable = $this->get('tejadong_datatables')->getDatatable('AcmeDemoBundle:Customer');
+    $datatable = $datatableManager->getDatatable('AcmeDemoBundle:Customer');
 
     // Add the $datatable variable, or other needed variables, to the callback scope
     $datatable->addWhereBuilderCallback(function($qb) use ($datatable) {
@@ -177,9 +150,9 @@ then you can toggle it with the `hideFilteredCount` method.
 
 ``` php
 
-public function getDatatableAction()
+public function getDatatableAction(DatatableManager $datatableManager)
 {
-    $datatable = $this->get('tejadong_datatables')
+    $datatable = $datatableManager
         ->getDatatable('AcmeDemoBundle:Customer')
         ->addWhereBuilderCallback(function($qb) use ($datatable) {
             // ...
@@ -235,9 +208,9 @@ You can toggle and modify these properties with the methods `setDtRowClass`, `us
 
 ``` php
 
-public function getDatatableAction()
+public function getDatatableAction(DatatableManager $datatableManager)
 {
-    $datatable = $this->get('tejadong_datatables')
+    $datatable = $datatableManager
         ->getDatatable('AcmeDemoBundle:Customer')
         ->setDtRowClass('special-class') // Add whatever class(es) you want. Separate classes with a space.
         ->useDtRowId(true);
@@ -247,21 +220,3 @@ public function getDatatableAction()
 ```
 
 By default neither properties are added to the output
-
-## The Doctrine Paginator and MS SQL
-
-By default, the Doctrine Paginator utility is used to correctly set limits and offsets. However, using it may cause issues with
-MS SQL. You may receive an error like...
-
-`SQL Error - The ORDER BY clause is invalid in views, inline functions, derived tables, subqueries, and common table expressions, unless TOP, OFFSET or FOR XML is also specified`
-
-To get around this you can disable the use of the Paginator by doing the following...
-
-```yml
-tejadong_datatables:
-    datatable:
-        use_doctrine_paginator: false
-```
-
-However, please note that by disabling the use of the paginator you may not get the full results from DataTables that you would
-expect.
