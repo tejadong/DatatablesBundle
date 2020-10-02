@@ -17,8 +17,8 @@ class Configuration implements ConfigurationInterface
      */
     public function getConfigTreeBuilder()
     {
-        $treeBuilder = new TreeBuilder();
-        $rootNode = $treeBuilder->root('tejadong_datatables');
+        $treeBuilder = new TreeBuilder('tejadong_datatables');
+        $rootNode = $treeBuilder->getRootNode();
 
         $rootNode
             ->children()
@@ -26,12 +26,6 @@ class Configuration implements ConfigurationInterface
                     ->addDefaultsIfNotSet()
                     ->children()
                         ->booleanNode('use_doctrine_paginator')->defaultTrue()->end()
-                    ->end()
-                ->end()
-                ->arrayNode('service')
-                    ->addDefaultsIfNotSet()
-                    ->children()
-                        ->scalarNode('serializer')->defaultValue('jms_serializer.serializer')->end()
                     ->end()
                 ->end()
             ->end();

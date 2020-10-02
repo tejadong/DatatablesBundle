@@ -9,10 +9,15 @@
  
     <services>
         <!-- DataTables -->
-        <service id="tejadong_datatables" class="%tejadong_datatables_manager.class%">
+        <service id="tejadong_datatables" class="%tejadong_datatables_manager.class%" autowire="true">
             <argument type="service" id="doctrine" />
             <argument type="service" id="service_container" />
+            <argument type="service" id="jms_serializer" />
             <argument /> <!-- use_doctrine_paginator -->
+        </service>
+
+        <service id="Tejadong\DatatablesBundle\Datatables\DatatableManager" alias="tejadong_datatables">
+
         </service>
     </services>
 </container>

@@ -25,12 +25,8 @@ class TejadongDatatablesExtension extends Extension
         $loader = new Loader\XmlFileLoader($container, new FileLocator(__DIR__.'/../Resources/config'));
         $loader->load('services.xml');
 
-        foreach ($config['service'] as $key => $service) {
-            $container->setAlias($this->getAlias() . '.' . $key, $service);
-        }
-
         $container->getDefinition('tejadong_datatables')
-            ->replaceArgument(2, $config['datatable']['use_doctrine_paginator']);
+            ->replaceArgument(3, $config['datatable']['use_doctrine_paginator']);
     }
 
     /**

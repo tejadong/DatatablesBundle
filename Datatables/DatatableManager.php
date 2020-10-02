@@ -2,6 +2,7 @@
 
 namespace Tejadong\DatatablesBundle\Datatables;
 
+use JMS\Serializer\SerializerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Doctrine\Bundle\DoctrineBundle\Registry as DoctrineRegistry;
 
@@ -13,19 +14,25 @@ class DatatableManager
     protected $doctrine;
 
     /**
-     * @var object The Symfony2 container to grab the Request object from
+     * @var object The Symfony container to grab the Request object from
      */
     protected $container;
+
+    /**
+     * @var object The Symfony JMSSerializer
+     */
+    protected $serializer;
 
     /**
      * @var boolean Whether or not to use the Doctrine Paginator utility by default
      */
     protected $useDoctrinePaginator;
 
-    public function __construct(DoctrineRegistry $doctrine, ContainerInterface $container, $useDoctrinePaginator)
+    public function __construct(DoctrineRegistry $doctrine, ContainerInterface $container, SerializerInterface $serializer, $useDoctrinePaginator = true)
     {
         $this->doctrine = $doctrine;
         $this->container = $container;
+        $this->serializer = $serializer;
         $this->useDoctrinePaginator = $useDoctrinePaginator;
     }
 
@@ -65,7 +72,7 @@ class DatatableManager
             $this->doctrine->getRepository($class),
             $this->doctrine->getManager()->getClassMetadata($class),
             $this->doctrine->getManager(),
-            $this->container->get('tejadong_datatables.serializer')
+            $this->serializer
         );
         return $datatable->useDoctrinePaginator($this->useDoctrinePaginator);
     }
