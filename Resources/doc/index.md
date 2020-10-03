@@ -53,6 +53,19 @@ Use composer to download the bundle using the following command:
 $ php composer require tejadong/datatables-bundle
 ```
 
+### Step 2: Add the config format
+
+
+Add settings to support date filtering d/m/Y H:i:s :
+
+```yml
+doctrine:
+    orm:
+        dql:
+            datetime_functions:
+                date_format: DoctrineExtensions\Query\Mysql\DateFormat
+```
+
 ## Usage
 
 To respond to a DataTables.js request from a controller, you can do the following:

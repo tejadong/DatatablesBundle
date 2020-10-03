@@ -24,6 +24,7 @@
 
 namespace Tejadong\DatatablesBundle\Datatables;
 
+use Doctrine\Migrations\Exception\UnknownMigrationVersion;
 use Doctrine\ORM\EntityManager;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\Query;
@@ -34,6 +35,7 @@ use Doctrine\ORM\Tools\Pagination\Paginator;
 use Symfony\Component\DependencyInjection\Container;
 use Symfony\Component\Config\Definition\Exception\Exception;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Serializer\Normalizer\DataUriNormalizer;
 
 class Datatable
 {
@@ -484,6 +486,18 @@ class Datatable
             for ($i=0 ; $i < count($this->parameters); $i++) {
                 if (isset($this->request['bSearchable_'.$i]) && $this->request['bSearchable_'.$i] == "true") {
                     $qbParam = "sSearch_global_{$this->associations[$i]['entityName']}_{$this->associations[$i]['fieldName']}";
+                    $fieldType = $this->metadata->getTypeOfField(lcfirst($this->associations[$i]['fieldName']));
+
+                    if ($fieldType === 'datetime' || $fieldType === 'date') {
+                        $orExpr->add(
+                            $qb->expr()->like(
+                                "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%d/%m/%Y %H:%i:%s')",
+                                ":$qbParam"
+                            )
+                        );
+                        $qb->setParameter($qbParam, "%" . $this->request['sSearch_'.$i] . "%");
+                    }
+
                     $orExpr->add($qb->expr()->like(
                         $this->associations[$i]['fullName'],
                         ":$qbParam"
@@ -496,9 +510,22 @@ class Datatable
 
         // Individual column filtering
         $andExpr = $qb->expr()->andX();
+        $orExpr = $qb->expr()->orX();
         for ($i=0 ; $i < count($this->parameters); $i++) {
             if (isset($this->request['bSearchable_'.$i]) && $this->request['bSearchable_'.$i] == "true" && $this->request['sSearch_'.$i] != '') {
                 $qbParam = "sSearch_single_{$this->associations[$i]['entityName']}_{$this->associations[$i]['fieldName']}";
+                $fieldType = $this->metadata->getTypeOfField(lcfirst($this->associations[$i]['fieldName']));
+
+                if ($fieldType === 'datetime' || $fieldType === 'date') {
+                    $orExpr->add(
+                        $qb->expr()->like(
+                            "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%d/%m/%Y %H:%i:%s')",
+                            ":$qbParam"
+                        )
+                    );
+                    $qb->setParameter($qbParam, "%" . $this->request['sSearch_'.$i] . "%");
+                }
+                
                 $andExpr->add($qb->expr()->like(
                     $this->associations[$i]['fullName'],
                     ":$qbParam"
@@ -508,6 +535,9 @@ class Datatable
         }
         if ($andExpr->count() > 0) {
             $qb->andWhere($andExpr);
+        }
+        if ($orExpr->count() > 0) {
+            $qb->orWhere($orExpr);
         }
 
         if (!empty($this->callbacks['WhereBuilder'])) {
