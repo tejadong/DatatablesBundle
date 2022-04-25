@@ -488,18 +488,23 @@ class Datatable
                     $qbParam = "sSearch_global_{$this->associations[$i]['entityName']}_{$this->associations[$i]['fieldName']}";
                     $fieldType = $this->metadata->getTypeOfField(lcfirst($this->associations[$i]['fieldName']));
 
-                    if ($fieldType === 'datetime' || $fieldType === 'date') {
-                        $orExpr->add(
-                            $qb->expr()->like(
-                                "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%d/%m/%Y %H:%i:%s')",
-                                ":$qbParam"
-                            )
-                        );
-                        $qb->setParameter($qbParam, "%" . $this->request['sSearch_'.$i] . "%");
+                    switch ($fieldType) {
+                        case "datetime":
+                            $fieldName = "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%d/%m/%Y %H:%i:%s')";
+                            break;
+                        case "time":
+                            $fieldName = "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%H:%i:%s')";
+                            break;
+                        case "date":
+                            $fieldName = "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%d/%m/%Y')";
+                            break;
+                        default:
+                            $fieldName = $this->associations[$i]['fullName'];
+                            break;
                     }
 
                     $orExpr->add($qb->expr()->like(
-                        $this->associations[$i]['fullName'],
+                        $fieldName,
                         ":$qbParam"
                     ));
                     $qb->setParameter($qbParam, "%" . $this->request['sSearch'] . "%");
@@ -510,34 +515,36 @@ class Datatable
 
         // Individual column filtering
         $andExpr = $qb->expr()->andX();
-        $orExpr = $qb->expr()->orX();
         for ($i=0 ; $i < count($this->parameters); $i++) {
             if (isset($this->request['bSearchable_'.$i]) && $this->request['bSearchable_'.$i] == "true" && $this->request['sSearch_'.$i] != '') {
                 $qbParam = "sSearch_single_{$this->associations[$i]['entityName']}_{$this->associations[$i]['fieldName']}";
                 $fieldType = $this->metadata->getTypeOfField(lcfirst($this->associations[$i]['fieldName']));
 
-                if ($fieldType === 'datetime' || $fieldType === 'date') {
-                    $orExpr->add(
-                        $qb->expr()->like(
-                            "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%d/%m/%Y %H:%i:%s')",
-                            ":$qbParam"
-                        )
-                    );
-                    $qb->setParameter($qbParam, "%" . $this->request['sSearch_'.$i] . "%");
+                switch ($fieldType) {
+                    case "datetime":
+                        $fieldName = "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%d/%m/%Y %H:%i:%s')";
+                        break;
+                    case "time":
+                        $fieldName = "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%H:%i:%s')";
+                        break;
+                    case "date":
+                        $fieldName = "DATE_FORMAT(".$this->associations[$i]['fullName'].", '%d/%m/%Y')";
+                        break;
+                    default:
+                        $fieldName = $this->associations[$i]['fullName'];
+                        break;
                 }
                 
                 $andExpr->add($qb->expr()->like(
-                    $this->associations[$i]['fullName'],
+                    $fieldName,
                     ":$qbParam"
                 ));
                 $qb->setParameter($qbParam, "%" . $this->request['sSearch_'.$i] . "%");
             }
         }
+
         if ($andExpr->count() > 0) {
             $qb->andWhere($andExpr);
-        }
-        if ($orExpr->count() > 0) {
-            $qb->orWhere($orExpr);
         }
 
         if (!empty($this->callbacks['WhereBuilder'])) {
