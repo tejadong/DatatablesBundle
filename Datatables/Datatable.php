@@ -30,10 +30,11 @@ use Doctrine\ORM\Query;
 use Doctrine\ORM\QueryBuilder;
 use Doctrine\ORM\EntityRepository;
 use Doctrine\ORM\Tools\Pagination\Paginator;
-
 use Symfony\Component\DependencyInjection\Container;
 use Symfony\Component\Config\Definition\Exception\Exception;
 use Symfony\Component\HttpFoundation\Response;
+use HTMLPurifier;
+use HTMLPurifier_Config;
 
 class Datatable
 {
@@ -194,6 +195,8 @@ class Datatable
      */
     protected $datatable;
 
+    protected $htmlPurifier;
+
     public function __construct(array $request, EntityRepository $repository, ClassMetadata $metadata, EntityManager $em, $serializer)
     {
         $this->em = $em;
@@ -213,6 +216,8 @@ class Datatable
 
         $identifiers = $this->metadata->getIdentifierFieldNames();
         $this->rootEntityIdentifier = array_shift($identifiers);
+
+        $this->htmlPurifierInit();
     }
 
     /**
@@ -684,6 +689,10 @@ class Datatable
                     }
                 }
             }
+
+            // Iterate and sanitize
+            $item = $this->purifyRecursive($item);
+
             $output['aaData'][] = $item;
         }
 
@@ -860,5 +869,46 @@ class Datatable
 
         return $response->setContent(json_encode($data));
 
+    }
+
+    private function htmlPurifierInit()
+    {
+        $config = HTMLPurifier_Config::createDefault();
+
+        // Permitir todos los elementos y atributos válidos HTML5, para no limitar nada
+        $config->set('HTML.Allowed', null); // No restringir etiquetas ni atributos
+
+        // Permitir completamente el CSS, para evitar que modifique estilos
+        $config->set('CSS.AllowedProperties', null);
+
+        // No transformar ni corregir el HTML
+        $config->set('HTML.Doctype', 'HTML 4.01 Transitional'); // un doctype flexible
+        $config->set('HTML.Trusted', false); // seguridad contra XSS
+        $config->set('Core.EscapeNonASCIICharacters', false);
+        $config->set('Core.ConvertDocumentToFragment', true);
+
+        // Evitar auto-corrección de etiquetas
+        $config->set('HTML.DefinitionID', 'custom-def');
+        $config->set('HTML.DefinitionRev', 1);
+        $config->set('AutoFormat.AutoParagraph', false);
+        $config->set('AutoFormat.RemoveEmpty', false);
+
+        // Deshabilitar filtro CSS agresivo
+        $config->set('CSS.Trusted', false);
+        $config->set('CSS.AllowImportant', true);
+
+        $this->htmlPurifier = new HTMLPurifier($config);
+    }
+
+    protected function purifyRecursive($data)
+    {
+        foreach ($data as $key => $value) {
+            if (is_string($value)) {
+                $data[$key] = $this->htmlPurifier->purify($value);
+            } elseif (is_array($value)) {
+                $data[$key] = $this->purifyRecursive($value);
+            }
+        }
+        return $data;
     }
 }
