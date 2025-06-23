@@ -19,23 +19,22 @@
  *     { "mData": "customer.location.address" }
  *
  * Felix-Antoine Paradis is the author of the original implementation this is
- * built off of, see: https://gist.github.com/1638094 
+ * built off of, see: https://gist.github.com/1638094
  */
 
 namespace Tejadong\DatatablesBundle\Datatables;
 
-use Doctrine\Migrations\Exception\UnknownMigrationVersion;
 use Doctrine\ORM\EntityManager;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\Query;
 use Doctrine\ORM\QueryBuilder;
 use Doctrine\ORM\EntityRepository;
 use Doctrine\ORM\Tools\Pagination\Paginator;
-
 use Symfony\Component\DependencyInjection\Container;
 use Symfony\Component\Config\Definition\Exception\Exception;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\Serializer\Normalizer\DataUriNormalizer;
+use HTMLPurifier;
+use HTMLPurifier_Config;
 
 class Datatable
 {
@@ -196,6 +195,8 @@ class Datatable
      */
     protected $datatable;
 
+    protected $htmlPurifier;
+
     public function __construct(array $request, EntityRepository $repository, ClassMetadata $metadata, EntityManager $em, $serializer)
     {
         $this->em = $em;
@@ -215,6 +216,8 @@ class Datatable
 
         $identifiers = $this->metadata->getIdentifierFieldNames();
         $this->rootEntityIdentifier = array_shift($identifiers);
+
+        $this->htmlPurifierInit();
     }
 
     /**
@@ -298,8 +301,8 @@ class Datatable
     protected function setRelatedEntityColumnInfo(array &$association, array $fields) {
         $mdataName = implode('.', $fields);
         $lastField = Container::camelize(array_pop($fields));
-		$joinName = $this->tableName;
-		$entityName = '';
+        $joinName = $this->tableName;
+        $entityName = '';
         $columnName = '';
 
         // loop through the related entities, checking the associations as we go
@@ -534,11 +537,11 @@ class Datatable
                         $fieldName = $this->associations[$i]['fullName'];
                         break;
                 }
-                
+
                 $andExpr->add($qb->expr()->like(
                     $fieldName,
-                    ":$qbParam"
-                ));
+                    ":$qbParam")
+                );
                 $qb->setParameter($qbParam, "%" . $this->request['sSearch_'.$i] . "%");
             }
         }
@@ -591,14 +594,14 @@ class Datatable
         foreach ($this->associations as $column) {
             $parts = explode('.', $column['fullName']);
 
-			if(count($parts) > 1){
-				$columns[$parts[0]][] = $parts[1];
-			}else{
-				$columns['Custom'][] = $parts[0];
-			}
-		}
+            if(count($parts) > 1){
+                $columns[$parts[0]][] = $parts[1];
+            }else{
+                $columns['Custom'][] = $parts[0];
+            }
+        }
 
-		// Partial column results on entities require that we include the identifier as part of the selection
+        // Partial column results on entities require that we include the identifier as part of the selection
         foreach ($this->identifiers as $joinName => $identifiers) {
             if (!in_array($identifiers[0], $columns[$joinName])) {
                 array_unshift($columns[$joinName], $identifiers[0]);
@@ -611,8 +614,8 @@ class Datatable
         }
 
         foreach ($columns as $columnName => $fields) {
-        	if($columnName != 'Custom')
-        		$partials[] = 'partial ' . $columnName . '.{' . implode(',', $fields) . '}';
+            if($columnName != 'Custom')
+                $partials[] = 'partial ' . $columnName . '.{' . implode(',', $fields) . '}';
         }
 
         $qb->select(implode(',', $partials));
@@ -623,7 +626,7 @@ class Datatable
      * Method to execute after constructing this object. Configures the object before
      * executing getSearchResults()
      */
-    public function makeSearch() 
+    public function makeSearch()
     {
         $this->setSelect($this->qb);
         $this->setAssociations($this->qb);
@@ -686,6 +689,10 @@ class Datatable
                     }
                 }
             }
+
+            // Iterate and sanitize
+            $item = $this->purifyRecursive($item);
+
             $output['aaData'][] = $item;
         }
 
@@ -793,7 +800,7 @@ class Datatable
 
         return (int) $qb->getQuery()->getSingleScalarResult();
     }
-    
+
     /**
      * @return int Total query results after searches/filtering
      */
@@ -845,22 +852,63 @@ class Datatable
 
     public function setCustom($response, $nombre, $clase, $funcion, $parameters = []){
 
-    	$data = json_decode($response->getContent(), true);
+        $data = json_decode($response->getContent(), true);
 
-    	foreach($data['aaData'] as $key => $registro){
+        foreach($data['aaData'] as $key => $registro){
 
-    		$parametros = [];
+            $parametros = [];
 
-			if(count($parameters) == 0)
-				$parametros = array($registro['id']);
-			else{
-				$parametros = array_merge(array($registro['id']), $parameters);
-			}
+            if(count($parameters) == 0)
+                $parametros = array($registro['id']);
+            else{
+                $parametros = array_merge(array($registro['id']), $parameters);
+            }
 
-			$data['aaData'][$key][$nombre] = call_user_func_array( array( $clase, $funcion), $parametros );
-		}
+            $data['aaData'][$key][$nombre] = call_user_func_array( array( $clase, $funcion), $parametros );
+        }
 
-    	return $response->setContent(json_encode($data));
+        return $response->setContent(json_encode($data));
 
-	}
+    }
+
+    private function htmlPurifierInit()
+    {
+        $config = HTMLPurifier_Config::createDefault();
+
+        // Permitir todos los elementos y atributos válidos HTML5, para no limitar nada
+        $config->set('HTML.Allowed', null); // No restringir etiquetas ni atributos
+
+        // Permitir completamente el CSS, para evitar que modifique estilos
+        $config->set('CSS.AllowedProperties', null);
+
+        // No transformar ni corregir el HTML
+        $config->set('HTML.Doctype', 'HTML 4.01 Transitional'); // un doctype flexible
+        $config->set('HTML.Trusted', false); // seguridad contra XSS
+        $config->set('Core.EscapeNonASCIICharacters', false);
+        $config->set('Core.ConvertDocumentToFragment', true);
+
+        // Evitar auto-corrección de etiquetas
+        $config->set('HTML.DefinitionID', 'custom-def');
+        $config->set('HTML.DefinitionRev', 1);
+        $config->set('AutoFormat.AutoParagraph', false);
+        $config->set('AutoFormat.RemoveEmpty', false);
+
+        // Deshabilitar filtro CSS agresivo
+        $config->set('CSS.Trusted', false);
+        $config->set('CSS.AllowImportant', true);
+
+        $this->htmlPurifier = new HTMLPurifier($config);
+    }
+
+    protected function purifyRecursive($data)
+    {
+        foreach ($data as $key => $value) {
+            if (is_string($value)) {
+                $data[$key] = $this->htmlPurifier->purify($value);
+            } elseif (is_array($value)) {
+                $data[$key] = $this->purifyRecursive($value);
+            }
+        }
+        return $data;
+    }
 }
