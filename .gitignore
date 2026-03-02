@@ -1,10 +1,21 @@
 /vendor/
-*~
-composer.lock
-/phpunit.xml
 
-# vim files
+# Composer
+composer.lock
+
+# IDE
+/.idea
+/.vscode
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vim
 .*.sw[a-z]
 *.un~
 Session.vim
-/.idea
+
+# Temp files
+*~
+.phpunit.result.cache

@@ -1,0 +1,15 @@
+services:
+  Tejadong\DatatablesBundle\:
+    resource: '../src/'
+    autowire: true
+    autoconfigure: true
+
+  Tejadong\DatatablesBundle\Datatables\DatatableManager:
+    autowire: true
+    public: true
+    arguments:
+      $useDoctrinePaginator: '%tejadong_datatables.use_doctrine_paginator%'
+
+  tejadong_datatables:
+    alias: Tejadong\DatatablesBundle\Datatables\DatatableManager
+    public: true
