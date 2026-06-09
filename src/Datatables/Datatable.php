@@ -335,7 +335,8 @@ class Datatable
         foreach ($this->parameters as $i => $parameter) {
             if (
                 ($this->request['bSearchable_' . $i] ?? '') === "true" &&
-                !empty($this->request['sSearch_' . $i])
+                isset($this->request['sSearch_' . $i]) &&
+                $this->request['sSearch_' . $i] !== ''
             ) {
                 $qbParam = "sSearch_single_{$i}";
                 $fieldName = $this->associations[$i]['fullName'];
