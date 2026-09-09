@@ -219,6 +219,11 @@ class Datatable
         $association['fieldName'] = $lastField;
         $association['joinName'] = $joinName;
         $association['fullName'] = $this->getFullName($association);
+
+        if (!empty($association['containsCollections'])) {
+            $association['mdataName'] = $mdataName;
+            $association['aggregateAlias'] = str_replace('.', '_', $mdataName) . '_agg';
+        }
     }
 
     protected function setSingleFieldColumnInfo(array &$association, string $fieldName): void
@@ -299,8 +304,13 @@ class Datatable
             $columnIndex = (int) $this->request['iSortCol_' . $i];
 
             if (($this->request['bSortable_' . $columnIndex] ?? '') === "true") {
+                $column = $this->associations[$columnIndex];
+                $orderField = !empty($column['containsCollections'])
+                    ? $column['aggregateAlias']
+                    : $column['fullName'];
+
                 $qb->addOrderBy(
-                    $this->associations[$columnIndex]['fullName'],
+                    $orderField,
                     $this->request['sSortDir_' . $i]
                 );
             }
@@ -309,6 +319,8 @@ class Datatable
 
     public function setWhere(QueryBuilder $qb): void
     {
+        $hasCollectionColumn = $this->doesQueryContainCollections();
+
         if ($this->search !== '') {
             $orExpr = $qb->expr()->orX();
 
@@ -318,7 +330,10 @@ class Datatable
                 }
 
                 $qbParam = "sSearch_global_{$i}";
-                $fieldName = $this->associations[$i]['fullName'];
+                $column = $this->associations[$i];
+                $fieldName = !empty($column['containsCollections'])
+                    ? $column['aggregateAlias']
+                    : $column['fullName'];
 
                 $orExpr->add(
                     $qb->expr()->like($fieldName, ":$qbParam")
@@ -327,23 +342,33 @@ class Datatable
                 $qb->setParameter($qbParam, '%' . $this->search . '%');
             }
 
-            $qb->andWhere($orExpr);
+            if ($hasCollectionColumn) {
+                $qb->andHaving($orExpr);
+            } else {
+                $qb->andWhere($orExpr);
+            }
         }
 
         $andExpr = $qb->expr()->andX();
+        $havingExpr = $qb->expr()->andX();
 
         foreach ($this->parameters as $i => $parameter) {
             if (
                 ($this->request['bSearchable_' . $i] ?? '') === "true" &&
-                isset($this->request['sSearch_' . $i]) &&
-                $this->request['sSearch_' . $i] !== ''
+                !empty($this->request['sSearch_' . $i])
             ) {
                 $qbParam = "sSearch_single_{$i}";
-                $fieldName = $this->associations[$i]['fullName'];
+                $column = $this->associations[$i];
 
-                $andExpr->add(
-                    $qb->expr()->like($fieldName, ":$qbParam")
-                );
+                if (!empty($column['containsCollections'])) {
+                    $havingExpr->add(
+                        $qb->expr()->like($column['aggregateAlias'], ":$qbParam")
+                    );
+                } else {
+                    $andExpr->add(
+                        $qb->expr()->like($column['fullName'], ":$qbParam")
+                    );
+                }
 
                 $qb->setParameter(
                     $qbParam,
@@ -354,6 +379,10 @@ class Datatable
 
         if ($andExpr->count() > 0) {
             $qb->andWhere($andExpr);
+        }
+
+        if ($havingExpr->count() > 0) {
+            $qb->andHaving($havingExpr);
         }
 
         foreach ($this->callbacks['WhereBuilder'] as $callback) {
@@ -379,12 +408,24 @@ class Datatable
     {
         $columns = [];
         $partials = [];
+        $aggregates = [];
+        $collectionJoinNames = [];
 
         foreach (array_keys($this->assignedJoins) as $joinName) {
             $columns[$joinName] = [];
         }
 
         foreach ($this->associations as $column) {
+            if (!empty($column['containsCollections'])) {
+                $aggregates[] = sprintf(
+                    "GROUP_CONCAT(DISTINCT %s SEPARATOR ', ') AS %s",
+                    $column['fullName'],
+                    $column['aggregateAlias']
+                );
+                $collectionJoinNames[$column['joinName']] = true;
+                continue;
+            }
+
             $parts = explode('.', $column['fullName']);
 
             if (count($parts) > 1) {
@@ -393,6 +434,10 @@ class Datatable
         }
 
         foreach ($this->identifiers as $joinName => $identifiers) {
+            if (isset($collectionJoinNames[$joinName])) {
+                continue;
+            }
+
             if (!in_array($identifiers[0], $columns[$joinName] ?? [])) {
                 array_unshift($columns[$joinName], $identifiers[0]);
             }
@@ -412,8 +457,18 @@ class Datatable
             }
         }
 
-        $qb->select(implode(',', $partials))
+        $qb->select(implode(',', array_merge($partials, $aggregates)))
             ->from($this->metadata->getName(), $this->tableName);
+
+        if (!empty($aggregates)) {
+            $groupBy = [];
+            foreach ($columns as $alias => $fields) {
+                foreach ($fields as $field) {
+                    $groupBy[] = "$alias.$field";
+                }
+            }
+            $qb->groupBy(implode(',', $groupBy));
+        }
     }
 
     public function makeSearch(): self
@@ -444,6 +499,20 @@ class Datatable
             : $query->getResult(Query::HYDRATE_ARRAY);
 
         foreach ($items as $item) {
+            if (isset($item[0]) && is_array($item[0])) {
+                $entity = $item[0];
+                unset($item[0]);
+                $item = $entity + $item;
+            }
+
+            foreach ($this->associations as $column) {
+                if (!empty($column['containsCollections'])) {
+                    $value = $item[$column['aggregateAlias']] ?? null;
+                    unset($item[$column['aggregateAlias']]);
+                    $this->injectNestedValue($item, $column['mdataName'], $value);
+                }
+            }
+
             if ($this->useDtRowClass && $this->dtRowClass !== null) {
                 $item['DT_RowClass'] = $this->dtRowClass;
             }
@@ -474,6 +543,31 @@ class Datatable
             }
         }
         return false;
+    }
+
+    /**
+     * Escribe $value en $item siguiendo una ruta en notación de puntos,
+     * creando los arrays intermedios que hagan falta.
+     * injectNestedValue($item, 'deportes.nombre', 'a, b') => $item['deportes']['nombre'] = 'a, b'
+     */
+    protected function injectNestedValue(array &$item, string $path, $value): void
+    {
+        $keys = explode('.', $path);
+        $target = &$item;
+        $lastIndex = count($keys) - 1;
+
+        foreach ($keys as $index => $key) {
+            if ($index === $lastIndex) {
+                $target[$key] = $value;
+                break;
+            }
+
+            if (!isset($target[$key]) || !is_array($target[$key])) {
+                $target[$key] = [];
+            }
+
+            $target = &$target[$key];
+        }
     }
 
     public function getSearchResults(string $resultType = ''): mixed
@@ -523,6 +617,16 @@ class Datatable
 
     public function getCountFilteredResults(): int
     {
+        if ($this->doesQueryContainCollections()) {
+            $qb = $this->em->createQueryBuilder();
+
+            $this->setSelect($qb);
+            $this->setAssociations($qb);
+            $this->setWhere($qb);
+
+            return (new Paginator($qb->getQuery(), true))->count();
+        }
+
         $qb = $this->repository->createQueryBuilder($this->tableName)
             ->select('count(distinct ' . $this->tableName . '.' . $this->rootEntityIdentifier . ')');
 
