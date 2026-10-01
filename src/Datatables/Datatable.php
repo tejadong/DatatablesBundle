@@ -45,6 +45,9 @@ class Datatable
     protected array $parameters = [];
     protected array $associations = [];
     protected array $assignedJoins = [];
+    // Joins que forman parte de una ruta con colección (desde la propia colección): sus identificadores no se
+    // seleccionan ni se agrupan, para que la consulta devuelva una fila por entidad raíz
+    protected array $collectionJoins = [];
     protected array $joinTypes = [];
     protected QueryBuilder $qb;
 
@@ -170,6 +173,7 @@ class Datatable
         $columnName = '';
 
         $metadata = $this->metadata;
+        $crossesCollection = false;
 
         while ($field = array_shift($fields)) {
             $columnName .= empty($columnName) ? $field : ".$field";
@@ -185,6 +189,7 @@ class Datatable
 
             if ($metadata->isCollectionValuedAssociation($entityName)) {
                 $association['containsCollections'] = true;
+                $crossesCollection = true;
             }
 
             $metadata = $this->em->getClassMetadata(
@@ -198,6 +203,10 @@ class Datatable
                 );
 
             $joinName .= '_' . $entityName;
+
+            if ($crossesCollection) {
+                $this->collectionJoins[$joinName] = true;
+            }
 
             if (!isset($this->assignedJoins[$joinName])) {
                 $this->assignedJoins[$joinName] = [
@@ -434,7 +443,9 @@ class Datatable
         }
 
         foreach ($this->identifiers as $joinName => $identifiers) {
-            if (isset($collectionJoinNames[$joinName])) {
+            // Los joins de una ruta con colección (no solo el último) se agregan con GROUP_CONCAT: seleccionar su
+            // identificador partiría el resultado en una fila por elemento de la colección
+            if (isset($collectionJoinNames[$joinName]) || isset($this->collectionJoins[$joinName])) {
                 continue;
             }
 
