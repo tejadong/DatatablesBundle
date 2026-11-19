@@ -23,6 +23,10 @@ class TejadongDatatablesExtension extends Extension implements PrependExtensionI
             'tejadong_datatables.use_doctrine_paginator',
             $config['datatable']['use_doctrine_paginator']
         );
+        $container->setParameter(
+            'tejadong_datatables.max_page_length',
+            $config['datatable']['max_page_length']
+        );
 
         // CARGAR services.yaml
         $loader = new YamlFileLoader(

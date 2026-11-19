@@ -12,6 +12,7 @@ use Doctrine\ORM\EntityRepository;
 use Doctrine\ORM\Tools\Pagination\Paginator;
 use JMS\Serializer\SerializerInterface;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use HTMLPurifier;
 use HTMLPurifier_Config;
 
@@ -23,6 +24,21 @@ class Datatable
     public const RESULT_ARRAY = 'Array';
     public const RESULT_JSON = 'Json';
     public const RESULT_RESPONSE = 'Response';
+
+    /** Máximo de columnas (`iColumns`) que se procesan por petición. */
+    private const MAX_COLUMNS = 100;
+
+    /** Longitud máxima del nombre de una columna (`mDataProp_N`). */
+    private const MAX_COLUMN_LENGTH = 100;
+
+    /**
+     * Forma admitida para el nombre de una columna: identificadores separados por puntos para las relaciones
+     * (`codigoPostal.localidad.nombre`). Los nombres de columna llegan del cliente y se usan para construir el DQL,
+     * así que cualquier otro carácter (espacios, paréntesis, comillas...) se rechaza.
+     */
+    private const COLUMN_PATTERN = '/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/';
+
+    private const INTEGER_PATTERN = '/^-?\d{1,12}$/';
 
     protected array $callbacks = [
         'WhereBuilder' => [],
@@ -56,6 +72,9 @@ class Datatable
     protected string $echo = '';
     protected string $search = '';
 
+    /** Tope de filas por página (0 = sin tope). `iDisplayLength = -1` («todo») también queda limitado por él. */
+    protected int $maxPageLength = 0;
+
     protected array $identifiers = [];
     protected string $rootEntityIdentifier;
 
@@ -65,18 +84,23 @@ class Datatable
     protected string $defaultJoinType;
     protected string $defaultResultType = self::RESULT_RESPONSE;
 
+    /**
+     * @throws BadRequestHttpException si la petición lleva parámetros que no tienen la forma que genera DataTables
+     */
     public function __construct(
         array $request,
         EntityRepository $repository,
         ClassMetadata $metadata,
         EntityManagerInterface $em,
-        SerializerInterface $serializer
+        SerializerInterface $serializer,
+        int $maxPageLength = 0
     ) {
         $this->request = $request;
         $this->repository = $repository;
         $this->metadata = $metadata;
         $this->em = $em;
         $this->serializer = $serializer;
+        $this->maxPageLength = max(0, $maxPageLength);
 
         $this->tableName = $this->camelize(
             substr(strrchr($metadata->getName(), '\\'), 1)
@@ -86,10 +110,15 @@ class Datatable
 
         $this->qb = $em->createQueryBuilder();
 
-        $this->echo = (string)($request['sEcho'] ?? '');
-        $this->search = (string)($request['sSearch'] ?? '');
-        $this->offset = (int)($request['iDisplayStart'] ?? 0);
-        $this->amount = (int)($request['iDisplayLength'] ?? 10);
+        $search = $request['sSearch'] ?? '';
+        if (!is_string($search)) {
+            throw new BadRequestHttpException("Parámetro 'sSearch' no válido.");
+        }
+
+        $this->echo = (string) $this->intParam('sEcho', 0);
+        $this->search = $search;
+        $this->offset = max(0, $this->intParam('iDisplayStart', 0));
+        $this->amount = $this->normalizeLength($this->intParam('iDisplayLength', 10));
 
         $identifiers = $metadata->getIdentifierFieldNames();
         $this->rootEntityIdentifier = (string) array_shift($identifiers);
@@ -101,6 +130,46 @@ class Datatable
     private function camelize(string $string): string
     {
         return str_replace(' ', '', ucwords(str_replace(['_', '-'], ' ', $string)));
+    }
+
+    /**
+     * Lee un parámetro entero de la petición. Vacío o ausente devuelve el valor por defecto.
+     *
+     * @throws BadRequestHttpException si no es un entero
+     */
+    private function intParam(string $key, int $default): int
+    {
+        $value = $this->request[$key] ?? '';
+
+        if ($value === '' || $value === null) {
+            return $default;
+        }
+
+        if (!is_string($value) || preg_match(self::INTEGER_PATTERN, $value) !== 1) {
+            throw new BadRequestHttpException("Parámetro '$key' no válido.");
+        }
+
+        return (int) $value;
+    }
+
+    /** Normaliza `iDisplayLength`: -1 es «todo»; 0 o negativos distintos de -1 usan el valor por defecto. */
+    private function normalizeLength(int $length): int
+    {
+        if ($length === -1) {
+            return $this->maxPageLength > 0 ? $this->maxPageLength : -1;
+        }
+
+        if ($length < 1) {
+            $length = 10;
+        }
+
+        return $this->maxPageLength > 0 ? min($length, $this->maxPageLength) : $length;
+    }
+
+    /** Escapa `\`, `%` y `_` para que el texto buscado se compare literalmente en un LIKE. */
+    private function escapeLike(string $value): string
+    {
+        return addcslashes($value, '\\%_');
     }
 
     public function getParameters(): array
@@ -132,25 +201,44 @@ class Datatable
         return $this;
     }
 
+    /**
+     * @throws BadRequestHttpException si el número de columnas o el nombre de alguna no son válidos
+     */
     public function setParameters(): void
     {
-        if (!isset($this->request['iColumns']) || !is_numeric($this->request['iColumns'])) {
+        if (!isset($this->request['iColumns'])) {
             return;
+        }
+
+        $columnCount = $this->intParam('iColumns', 0);
+        if ($columnCount < 0 || $columnCount > self::MAX_COLUMNS) {
+            throw new BadRequestHttpException("Parámetro 'iColumns' no válido.");
         }
 
         $params = [];
         $associations = [];
 
-        for ($i = 0; $i < (int) $this->request['iColumns']; $i++) {
+        for ($i = 0; $i < $columnCount; $i++) {
             $columnKey = 'mDataProp_' . $i;
 
             if (!isset($this->request[$columnKey])) {
                 continue;
             }
 
-            $fields = explode('.', $this->request[$columnKey]);
+            $column = $this->request[$columnKey];
 
-            $params[] = $this->request[$columnKey];
+            if (
+                !is_string($column)
+                || strlen($column) > self::MAX_COLUMN_LENGTH
+                || preg_match(self::COLUMN_PATTERN, $column) !== 1
+            ) {
+                throw new BadRequestHttpException("Nombre de la columna $i no válido.");
+            }
+
+            $fields = explode('.', $column);
+
+            // Se conserva el índice de la columna: el orden y la búsqueda se refieren a él (`iSortCol_N`, `bSearchable_N`).
+            $params[$i] = $column;
             $associations[$i] = ['containsCollections' => false];
 
             if (count($fields) > 1) {
@@ -175,12 +263,12 @@ class Datatable
         $metadata = $this->metadata;
         $crossesCollection = false;
 
-        while ($field = array_shift($fields)) {
-            $columnName .= empty($columnName) ? $field : ".$field";
+        foreach ($fields as $field) {
+            $columnName .= $columnName === '' ? $field : ".$field";
             $entityName = lcfirst($this->camelize($field));
 
             if (!$metadata->hasAssociation($entityName)) {
-                throw new \RuntimeException(
+                throw new BadRequestHttpException(
                     "Relación '$entityName' no encontrada ($mdataName)"
                 );
             }
@@ -219,7 +307,7 @@ class Datatable
         }
 
         if (!$metadata->hasField(lcfirst($lastField))) {
-            throw new \RuntimeException(
+            throw new BadRequestHttpException(
                 "Propiedad '$lastField' en la relación '$entityName' no encontrada ($mdataName)"
             );
         }
@@ -237,17 +325,29 @@ class Datatable
 
     protected function setSingleFieldColumnInfo(array &$association, string $fieldName): void
     {
-        $fieldName = $this->camelize($fieldName);
+        $camelized = $this->camelize($fieldName);
+        $property = lcfirst($camelized);
 
-        if (!$this->metadata->hasField(lcfirst($fieldName))) {
-            $association['fieldName'] = $fieldName;
-            $association['entityName'] = null;
-            $association['fullName'] = lcfirst($fieldName);
-        } else {
-            $association['fieldName'] = $fieldName;
+        if ($this->metadata->hasField($property)) {
+            $association['fieldName'] = $camelized;
             $association['entityName'] = $this->tableName;
-            $association['fullName'] = $this->tableName . '.' . lcfirst($fieldName);
+            $association['fullName'] = $this->tableName . '.' . $property;
+
+            return;
         }
+
+        // Columna sin campo en la entidad (acciones, imágenes, totales calculados...): se muestra, pero nunca se usa para
+        // ordenar, buscar ni seleccionar. Antes el nombre que enviaba el cliente se pegaba en el DQL.
+        $association['fieldName'] = $camelized;
+        $association['entityName'] = null;
+        $association['fullName'] = null;
+        $association['virtual'] = true;
+    }
+
+    /** Las columnas virtuales (sin campo de entidad) no intervienen en la consulta. */
+    protected function isVirtual(array $column): bool
+    {
+        return !empty($column['virtual']);
     }
 
     protected function getJoinName(
@@ -309,20 +409,33 @@ class Datatable
             return;
         }
 
-        for ($i = 0; $i < (int) $this->request['iSortingCols']; $i++) {
-            $columnIndex = (int) $this->request['iSortCol_' . $i];
+        $sortingColumns = min($this->intParam('iSortingCols', 0), self::MAX_COLUMNS);
 
-            if (($this->request['bSortable_' . $columnIndex] ?? '') === "true") {
-                $column = $this->associations[$columnIndex];
-                $orderField = !empty($column['containsCollections'])
-                    ? $column['aggregateAlias']
-                    : $column['fullName'];
+        for ($i = 0; $i < $sortingColumns; $i++) {
+            $columnIndex = $this->intParam('iSortCol_' . $i, -1);
 
-                $qb->addOrderBy(
-                    $orderField,
-                    $this->request['sSortDir_' . $i]
-                );
+            if (!isset($this->associations[$columnIndex])) {
+                continue;
             }
+
+            if (($this->request['bSortable_' . $columnIndex] ?? '') !== "true") {
+                continue;
+            }
+
+            $column = $this->associations[$columnIndex];
+
+            if ($this->isVirtual($column)) {
+                continue;
+            }
+
+            $orderField = !empty($column['containsCollections'])
+                ? $column['aggregateAlias']
+                : $column['fullName'];
+
+            // Solo `asc` o `desc`: la dirección se concatena en el DQL.
+            $direction = strtolower((string) ($this->request['sSortDir_' . $i] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
+
+            $qb->addOrderBy($orderField, $direction);
         }
     }
 
@@ -338,8 +451,13 @@ class Datatable
                     continue;
                 }
 
-                $qbParam = "sSearch_global_{$i}";
                 $column = $this->associations[$i];
+
+                if ($this->isVirtual($column)) {
+                    continue;
+                }
+
+                $qbParam = "sSearch_global_{$i}";
                 $fieldName = !empty($column['containsCollections'])
                     ? $column['aggregateAlias']
                     : $column['fullName'];
@@ -348,13 +466,17 @@ class Datatable
                     $qb->expr()->like($fieldName, ":$qbParam")
                 );
 
-                $qb->setParameter($qbParam, '%' . $this->search . '%');
+                $qb->setParameter($qbParam, '%' . $this->escapeLike($this->search) . '%');
             }
 
-            if ($hasCollectionColumn) {
-                $qb->andHaving($orExpr);
-            } else {
-                $qb->andWhere($orExpr);
+            // Sin columnas buscables (todas virtuales o no marcadas) la búsqueda global no filtra: un OR vacío daría un
+            // WHERE vacío y Doctrine lo rechazaría.
+            if ($orExpr->count() > 0) {
+                if ($hasCollectionColumn) {
+                    $qb->andHaving($orExpr);
+                } else {
+                    $qb->andWhere($orExpr);
+                }
             }
         }
 
@@ -362,28 +484,43 @@ class Datatable
         $havingExpr = $qb->expr()->andX();
 
         foreach ($this->parameters as $i => $parameter) {
-            if (
-                ($this->request['bSearchable_' . $i] ?? '') === "true" &&
-                !empty($this->request['sSearch_' . $i])
-            ) {
-                $qbParam = "sSearch_single_{$i}";
-                $column = $this->associations[$i];
+            if (($this->request['bSearchable_' . $i] ?? '') !== "true") {
+                continue;
+            }
 
-                if (!empty($column['containsCollections'])) {
-                    $havingExpr->add(
-                        $qb->expr()->like($column['aggregateAlias'], ":$qbParam")
-                    );
-                } else {
-                    $andExpr->add(
-                        $qb->expr()->like($column['fullName'], ":$qbParam")
-                    );
-                }
+            $columnSearch = $this->request['sSearch_' . $i] ?? '';
 
-                $qb->setParameter(
-                    $qbParam,
-                    '%' . $this->request['sSearch_' . $i] . '%'
+            if (!is_string($columnSearch)) {
+                throw new BadRequestHttpException("Parámetro 'sSearch_$i' no válido.");
+            }
+
+            // `"0"` es una búsqueda válida (antes `!empty()` la ignoraba).
+            if ($columnSearch === '') {
+                continue;
+            }
+
+            $column = $this->associations[$i];
+
+            if ($this->isVirtual($column)) {
+                continue;
+            }
+
+            $qbParam = "sSearch_single_{$i}";
+
+            if (!empty($column['containsCollections'])) {
+                $havingExpr->add(
+                    $qb->expr()->like($column['aggregateAlias'], ":$qbParam")
+                );
+            } else {
+                $andExpr->add(
+                    $qb->expr()->like($column['fullName'], ":$qbParam")
                 );
             }
+
+            $qb->setParameter(
+                $qbParam,
+                '%' . $this->escapeLike($columnSearch) . '%'
+            );
         }
 
         if ($andExpr->count() > 0) {
@@ -425,6 +562,10 @@ class Datatable
         }
 
         foreach ($this->associations as $column) {
+            if ($this->isVirtual($column) || empty($column['fullName'])) {
+                continue;
+            }
+
             if (!empty($column['containsCollections'])) {
                 $aggregates[] = sprintf(
                     "GROUP_CONCAT(DISTINCT %s SEPARATOR ', ') AS %s",
@@ -676,6 +817,18 @@ class Datatable
         $config = HTMLPurifier_Config::createDefault();
         $config->set('HTML.Allowed', null);
         $config->set('CSS.AllowedProperties', null);
+
+        // Por defecto HTMLPurifier guarda su caché dentro de `vendor/`, que suele no ser escribible en producción.
+        $cacheDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'tejadong-htmlpurifier';
+        if (!is_dir($cacheDir)) {
+            @mkdir($cacheDir, 0775, true);
+        }
+
+        if (is_dir($cacheDir) && is_writable($cacheDir)) {
+            $config->set('Cache.SerializerPath', $cacheDir);
+        } else {
+            $config->set('Cache.DefinitionImpl', null);
+        }
 
         $this->htmlPurifier = new HTMLPurifier($config);
     }

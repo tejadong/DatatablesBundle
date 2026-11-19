@@ -9,6 +9,7 @@ services:
     public: true
     arguments:
       $useDoctrinePaginator: '%tejadong_datatables.use_doctrine_paginator%'
+      $maxPageLength: '%tejadong_datatables.max_page_length%'
 
   tejadong_datatables:
     alias: Tejadong\DatatablesBundle\Datatables\DatatableManager

@@ -248,9 +248,44 @@ $datatable->useDoctrinePaginator(false);
 
 ## Security
 
-All output data is sanitized using HTMLPurifier before being returned.
+The column names, sorting and paging parameters come from the client (`mDataProp_N`, `iSortCol_N`, `sSortDir_N`,
+`iDisplayLength`...) and are used to build the DQL query, so they are validated:
+
+- **Column names** (`mDataProp_N`) must be identifiers separated by dots (`customer.location.address`). Any other
+  character (spaces, parentheses, quotes...) is rejected with a `400 Bad Request`
+  (`Symfony\Component\HttpKernel\Exception\BadRequestHttpException`), as is a relation or property that does not exist.
+- **Columns that are not an entity field** (actions, images, computed totals...) are *virtual*: they are returned as
+  usual but never used to sort, search or select.
+- **Sorting**: the direction is normalized to `asc` / `desc`; unknown or out-of-range column indexes are ignored.
+- **Search**: the search text is always bound as a parameter, and `%`, `_` and `\` are escaped so they are matched
+  literally (they are not wildcards). A search for `0` is a valid search.
+- **Numbers** (`sEcho`, `iColumns`, `iDisplayStart`, `iDisplayLength`, `iSortingCols`...) must be integers and at most
+  100 columns are processed.
+- **Page size**: optionally limit the rows per page (it also limits the "all" option, `iDisplayLength = -1`):
+
+  ```yaml
+  tejadong_datatables:
+      datatable:
+          max_page_length: 5000   # 0 = no limit (default)
+  ```
+
+All output data is sanitized using HTMLPurifier before being returned. Its definition cache is stored in the system
+temporary directory (not inside `vendor/`).
+
+Use the bundle only on endpoints that already check access (roles / voters): the pre-filter callbacks
+(`addWhereBuilderCallback`) are the place to restrict which rows each user can see.
 
 ---
+
+## What’s New (v2.0.5)
+
+- Security: the column name no longer reaches the DQL unvalidated (DQL injection through `mDataProp_N` when the column
+  was not an entity field); sorting direction and indexes, numeric parameters and `sSearch_N` types are validated.
+- Invalid client input is a `400 Bad Request` (it used to be a `500` `RuntimeException`).
+- LIKE searches escape `%`, `_` and `\`; searching `0` per column now works; a global search with no searchable column
+  no longer produces an empty `WHERE`.
+- `max_page_length` option; the column index is preserved when a `mDataProp_N` is missing.
+- Entity namespace aliases (`App:Customer`) are rejected with a clear exception on Doctrine ORM 3.
 
 ## What’s New (v2.0)
 
